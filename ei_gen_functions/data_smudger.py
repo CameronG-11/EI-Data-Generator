@@ -14,8 +14,6 @@ This data is just smudged so the over-votes are removed equally from both candid
 def smudging(df, helper_df):
 
 
-    df.to_excel("testing_data_smudger.xlsx", index=False)
-
     total_name = helper_df['total_name'][0]
     key_column = helper_df['key'][0]
     demographic_names = helper_df['new_demographics'].dropna().to_list()
