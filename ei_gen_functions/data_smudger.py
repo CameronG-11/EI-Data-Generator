@@ -20,18 +20,22 @@ def smudging(df, helper_df):
     candidate_names = helper_df['new_candidates'].dropna().to_list()
     abstain_name = helper_df['abstain_name'][0]
 
-
     new_columns = [key_column] + [total_name] + demographic_names + candidate_names + [abstain_name]
-    # print(new_columns)
 
     zero_smudged_ids = []
+    over_pop_ids = [] # # if sum of sub-demographic groups is more than total
+    under_pop_ids = [] # # if sum of sub-demographic groups is less than total
     votes_smudged_ids = []
     votes_smudged_counts = 0
+    pop_smudged_counts = 0
+    broken_count = 0
+    added_count = 0
 
     final_values = []
 
     for index, row in df.iterrows():
 
+        # re-creation of each row
         buffer = []
         i = 0
         while i < len(new_columns):
@@ -40,20 +44,25 @@ def smudging(df, helper_df):
 
         zero_smudged_flag = False
         candidate_sum = 0
+        pop_sum = 0 #
         for column, value in row.items():
             # Zero fixing, replace all 0 Total precincts with 1 demographic each
             # precinct who all did not vote (aka voted for Abstain).
             if column == total_name:
                 buffer[new_columns.index(total_name)] = value
                 if value == 0:
+                    # setting each demographic to 1
                     for name in demographic_names:
                         buffer[new_columns.index(name)] = 1
 
+                    # setting total to the # of demographics, as imputed 1 in each demographic.
                     buffer[new_columns.index(total_name)] = len(demographic_names)
+                    pop_sum = len(demographic_names)
                     zero_smudged_flag = True
 
             if column in demographic_names:
                 if not zero_smudged_flag:
+                    pop_sum = pop_sum + value
                     buffer[new_columns.index(str(column))] = value
 
             if column in candidate_names:
@@ -63,10 +72,8 @@ def smudging(df, helper_df):
             if column == key_column:
                 buffer[new_columns.index(str(column))] = value
 
-        over_voting_flag = candidate_sum > buffer[new_columns.index(total_name)]
         # Over-voting fix, subtract from both all candidates equally until fixed
-        if over_voting_flag:
-            sub_candidate_sum = candidate_sum
+        if candidate_sum > buffer[new_columns.index(total_name)]:
             while candidate_sum > buffer[new_columns.index(total_name)]:
                 for candidate in candidate_names:
                     if buffer[new_columns.index(candidate)] > 0:
@@ -74,6 +81,29 @@ def smudging(df, helper_df):
                         candidate_sum = candidate_sum - 1
                         votes_smudged_counts = votes_smudged_counts + 1
             votes_smudged_ids.append(row[key_column])
+
+        # Over-populated fix, subtract from both all demographics equally until fixed
+        if pop_sum > buffer[new_columns.index(total_name)]:
+            while pop_sum > buffer[new_columns.index(total_name)]:
+                for demographic in demographic_names:
+                    if buffer[new_columns.index(demographic)] > 0:
+                        buffer[new_columns.index(demographic)] = buffer[new_columns.index(demographic)] - 1
+                        pop_sum = pop_sum - 1
+                        pop_smudged_counts = pop_smudged_counts + 1
+            over_pop_ids.append(row[key_column])
+
+        # Under-populated fix, adding from both all demographics equally until fixed
+        # Could add an 'unknown' demographic similar to Abstain, but this would be odd to visualize.
+        if pop_sum < buffer[new_columns.index(total_name)]:
+            while pop_sum < buffer[new_columns.index(total_name)]:
+                for demographic in demographic_names:
+                    buffer[new_columns.index(demographic)] = buffer[new_columns.index(demographic)] + 1
+                    pop_sum = pop_sum + 1
+                    added_count = added_count + 1
+                    if pop_sum == buffer[new_columns.index(total_name)]:
+                        broken_count = broken_count + 1
+                        break
+            under_pop_ids.append(row[key_column])
 
         # adding votes for the Abstain candidate, which represents the people who did not vote
         buffer[new_columns.index(abstain_name)] = buffer[new_columns.index(total_name)] - candidate_sum
@@ -91,10 +121,15 @@ def smudging(df, helper_df):
     print(f"\nThere were {len(zero_smudged_ids)} zero population precincts that were smudged, "
           f"totaling {len(zero_smudged_ids) * len(demographic_names)} more equally distributed votes for {abstain_name}")
     print(zero_smudged_ids)
-
-    print(f"There were {len(votes_smudged_ids)} over-voted districts whose votes were smudged, "
-          f"totaling {votes_smudged_counts} equally removed votes")
+    print(f"There were {len(votes_smudged_ids)} over-voted districts "
+          f"whose votes were smudged, totaling {votes_smudged_counts} equally* removed votes.")
+    print(f"There were {len(over_pop_ids)} over-populated districts "
+          f"whose votes were smudged, totaling {pop_smudged_counts} equally* removed people.")
+    print(f"There were {len(under_pop_ids)} under-populated districts of which {broken_count} districts were un-evenly added to,"
+          f" totaling {added_count} added people.")
     print(votes_smudged_ids)
+    print("*equally removed unless one of the demographics/candidates would become negative, in which case the "
+          "remainder is removed from the non-zero candidates/demographics")
 
     output_df = pd.DataFrame(final_values, columns=new_columns)
 
